@@ -52,6 +52,27 @@ export class AuthService {
     return { user: this.sanitize(user) };
   }
 
+  async loginByGoogle(profile: any) {
+    const tenant = await this.prisma.tenant.findFirst({ where: { isActive: true } });
+    if (!tenant) throw new UnauthorizedException('No active tenant');
+
+    let user = await this.prisma.user.findFirst({ where: { email: profile.email } });
+    if (!user) {
+      user = await this.prisma.user.create({
+        data: {
+          email: profile.email,
+          firstName: profile.name || profile.email.split('@')[0],
+          avatarUrl: profile.avatar,
+          tenantId: tenant.id,
+          role: 'MEMBER',
+          referralCode: `ref_google_${Date.now()}`,
+        },
+      });
+    }
+    await this.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+    return { user: this.sanitize(user), ...(await this.generateTokens(user)) };
+  }
+
   private async generateTokens(user: any) {
     const payload = { sub: user.id, email: user.email, role: user.role, tenantId: user.tenantId };
     const [accessToken, refreshToken] = await Promise.all([
