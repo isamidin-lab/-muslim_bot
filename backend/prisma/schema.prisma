@@ -1,0 +1,507 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  description String?
+  logoUrl     String?
+  domain      String?
+  settings    String   @default("{}")
+  plan        String   @default("free")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  users       User[]
+  courses     Course[]
+  channels    Channel[]
+  memberships Membership[]
+  broadcasts  Broadcast[]
+  promotions  Promotion[]
+  aiUsageLogs AiUsageLog[]
+  analytics   TenantAnalytics[]
+}
+
+model User {
+  id               String         @id @default(cuid())
+  telegramId       String?        @unique
+  telegramUsername  String?
+  firstName        String
+  lastName         String?
+  email            String?        @unique
+  phone            String?
+  avatarUrl        String?
+  passwordHash     String?
+  role             String         @default("MEMBER")
+  status           String         @default("ACTIVE")
+  isActive         Boolean        @default(true)
+  gender           String?
+  age              Int?
+  country          String?
+  city             String?
+  bio              String?
+  intent           String?
+  lastLoginAt      DateTime?
+  lastActiveAt     DateTime?
+  metadata         String         @default("{}")
+  coins            Int            @default(0)
+  referralCode     String?        @unique
+  referredById     String?
+  referredBy       User?          @relation("Referrals", fields: [referredById], references: [id])
+  referrals        User[]         @relation("Referrals")
+  referralsMade    Referral[]     @relation("ReferralsMade")
+  referralsReferred Referral[]    @relation("ReferralsReferred")
+  isPremium        Boolean        @default(false)
+  isVIP            Boolean        @default(false)
+  premiumExpiresAt DateTime?
+  vipExpiresAt     DateTime?
+  isHidden         Boolean        @default(false)
+  isOnline         Boolean        @default(false)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  tenantId         String
+  tenant           Tenant         @relation(fields: [tenantId], references: [id])
+  progress         CourseProgress[]
+  purchases        Purchase[]
+  userMemberships  UserMembership[]
+  broadcasts       BroadcastRecipient[]
+  aiChats          AiChat[]
+  aiUsageLogs      AiUsageLog[]
+  coinTransactions CoinTransaction[]
+  achievements     UserAchievement[]
+  complaints       Complaint[]       @relation("ComplaintAbout")
+  complaintsMade   Complaint[]       @relation("ComplaintBy")
+  dailyCheckins    DailyCheckin[]
+  savedItems       SavedItem[]
+  readingHistory   ReadingHistory[]
+  adminActions     AdminAction[]
+  broadcastSent    Broadcast[]
+  lessonProgress   LessonProgress[]
+}
+
+model Course {
+  id          String   @id @default(cuid())
+  title       String
+  slug        String
+  description String?
+  imageUrl    String?
+  isPublished Boolean  @default(false)
+  isFeatured  Boolean  @default(false)
+  sortOrder   Int      @default(0)
+  settings    String   @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  modules     CourseModule[]
+  progresses  CourseProgress[]
+  @@unique([tenantId, slug])
+}
+
+model CourseModule {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  sortOrder   Int      @default(0)
+  isPublished Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  courseId     String
+  course       Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessons     Lesson[]
+  @@index([courseId])
+}
+
+model Lesson {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  contentType String   @default("TEXT")
+  content     String?
+  videoUrl    String?
+  audioUrl    String?
+  fileUrl     String?
+  duration    Int?
+  sortOrder   Int      @default(0)
+  isPublished Boolean  @default(false)
+  isFree      Boolean  @default(false)
+  settings    String   @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  moduleId    String
+  module      CourseModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  progresses  LessonProgress[]
+  tests       Test[]
+  homeworks   Homework[]
+  @@index([moduleId])
+}
+
+model LessonProgress {
+  id           String   @id @default(cuid())
+  isCompleted  Boolean  @default(false)
+  completedAt  DateTime?
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  lessonId     String
+  lesson       Lesson   @relation(fields: [lessonId], references: [id])
+  @@unique([userId, lessonId])
+}
+
+model Test {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  timeLimit   Int?
+  passScore   Int      @default(70)
+  maxAttempts Int      @default(3)
+  isPublished Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  lessonId    String
+  lesson      Lesson   @relation(fields: [lessonId], references: [id])
+  questions   TestQuestion[]
+}
+
+model TestQuestion {
+  id             String @id @default(cuid())
+  question       String
+  type           String @default("MULTIPLE_CHOICE")
+  options        String @default("[]")
+  correctAnswer  String
+  explanation    String?
+  sortOrder      Int    @default(0)
+  testId         String
+  test           Test   @relation(fields: [testId], references: [id], onDelete: Cascade)
+  attempts       TestAttempt[]
+}
+
+model TestAttempt {
+  id        String   @id @default(cuid())
+  answers   String   @default("[]")
+  score     Int
+  passed    Boolean
+  createdAt DateTime @default(now())
+  questionId String
+  question  TestQuestion @relation(fields: [questionId], references: [id])
+}
+
+model Homework {
+  id          String   @id @default(cuid())
+  content     String?
+  fileUrl     String?
+  status      String   @default("PENDING")
+  grade       Int?
+  feedback    String?
+  submittedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  userId      String
+  lessonId    String
+  lesson      Lesson   @relation(fields: [lessonId], references: [id])
+}
+
+model CourseProgress {
+  id        String   @id @default(cuid())
+  progress  Float    @default(0)
+  startDate DateTime @default(now())
+  endDate   DateTime?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  courseId   String
+  course     Course   @relation(fields: [courseId], references: [id])
+  @@unique([userId, courseId])
+}
+
+model Membership {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  price       Float
+  currency    String   @default("USD")
+  interval    String   @default("MONTHLY")
+  features    String   @default("[]")
+  courseIds   String   @default("[]")
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  autoRenew   Boolean  @default(false)
+  trialDays   Int      @default(0)
+  maxStudents Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  purchases   Purchase[]
+  userMemberships UserMembership[]
+  @@index([tenantId])
+}
+
+model UserMembership {
+  id           String   @id @default(cuid())
+  status       String   @default("ACTIVE")
+  startDate    DateTime @default(now())
+  endDate      DateTime?
+  autoRenew    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  membershipId String
+  membership   Membership @relation(fields: [membershipId], references: [id])
+  @@unique([userId, membershipId])
+}
+
+model Channel {
+  id         String   @id @default(cuid())
+  telegramId String
+  title      String
+  username   String?
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  memberships ChannelMembership[]
+}
+
+model ChannelMembership {
+  id        String @id @default(cuid())
+  channelId String
+  channel   Channel @relation(fields: [channelId], references: [id])
+  userId    String
+  expiresAt DateTime?
+}
+
+model Purchase {
+  id              String   @id @default(cuid())
+  amount          Float
+  currency        String   @default("USD")
+  provider        String
+  status          String   @default("PENDING")
+  providerOrderId String?
+  promocodeId     String?
+  paidAt          DateTime?
+  metadata        String   @default("{}")
+  createdAt       DateTime @default(now())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  membershipId    String
+  membership      Membership @relation(fields: [membershipId], references: [id])
+  @@index([userId])
+}
+
+model Broadcast {
+  id          String   @id @default(cuid())
+  title       String
+  content     String
+  type        String   @default("INSTANT")
+  status      String   @default("DRAFT")
+  targetTags  String   @default("[]")
+  targetGender String?
+  sentAt      DateTime?
+  createdAt   DateTime @default(now())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  senderId    String?
+  sender      User?    @relation(fields: [senderId], references: [id])
+  recipients  BroadcastRecipient[]
+  funnelSteps BroadcastFunnelStep[]
+}
+
+model BroadcastRecipient {
+  id          String    @id @default(cuid())
+  broadcastId String
+  broadcast   Broadcast @relation(fields: [broadcastId], references: [id])
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  sentAt      DateTime  @default(now())
+  readAt      DateTime?
+}
+
+model BroadcastFunnelStep {
+  id          String    @id @default(cuid())
+  broadcastId String
+  broadcast   Broadcast @relation(fields: [broadcastId], references: [id])
+  stepOrder   Int
+  content     String
+  delayHours  Int       @default(0)
+}
+
+model Promotion {
+  id         String   @id @default(cuid())
+  name       String
+  discount   Float
+  isPercent  Boolean  @default(true)
+  maxUses    Int?
+  usedCount  Int      @default(0)
+  isActive   Boolean  @default(true)
+  startsAt   DateTime?
+  expiresAt  DateTime?
+  createdAt  DateTime @default(now())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  codes      Promocode[]
+}
+
+model Promocode {
+  id           String   @id @default(cuid())
+  code         String   @unique
+  isActive     Boolean  @default(true)
+  usesCount    Int      @default(0)
+  promotionId  String
+  promotion    Promotion @relation(fields: [promotionId], references: [id])
+}
+
+model AiChat {
+  id        String   @id @default(cuid())
+  messages  String   @default("[]")
+  model     String
+  tokens    Int      @default(0)
+  cost      Float    @default(0)
+  createdAt DateTime @default(now())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model AiUsageLog {
+  id        String   @id @default(cuid())
+  action    String
+  model     String
+  tokens    Int      @default(0)
+  cost      Float    @default(0)
+  createdAt DateTime @default(now())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+}
+
+model TenantAnalytics {
+  id           String   @id @default(cuid())
+  date         DateTime @default(now())
+  totalRevenue Float    @default(0)
+  totalSales   Int      @default(0)
+  totalUsers   Int      @default(0)
+  newUsers     Int      @default(0)
+  activeUsers  Int      @default(0)
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id])
+  @@unique([tenantId, date])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  action    String
+  entity    String
+  entityId  String?
+  oldData   String?
+  newData   String?
+  ip        String?
+  userId    String?
+  createdAt DateTime @default(now())
+}
+
+model CoinTransaction {
+  id        String   @id @default(cuid())
+  amount    Int
+  type      String
+  reason    String
+  createdAt DateTime @default(now())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  @@index([userId])
+}
+
+model Referral {
+  id         String   @id @default(cuid())
+  referrerId String
+  referrer   User     @relation("ReferralsMade", fields: [referrerId], references: [id])
+  referredId String
+  referred   User     @relation("ReferralsReferred", fields: [referredId], references: [id])
+  reward     Int      @default(0)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  @@unique([referrerId, referredId])
+}
+
+model Achievement {
+  id          String @id @default(cuid())
+  name        String
+  description String
+  icon        String
+  category    String
+  requirement String
+  reward      Int    @default(0)
+}
+
+model UserAchievement {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  achievementId String
+  achievedAt    DateTime @default(now())
+  @@unique([userId, achievementId])
+}
+
+model Complaint {
+  id         String    @id @default(cuid())
+  reason     String
+  details    String?
+  status     String    @default("PENDING")
+  resolvedAt DateTime?
+  createdAt  DateTime  @default(now())
+  aboutId    String
+  about      User      @relation("ComplaintAbout", fields: [aboutId], references: [id])
+  byId       String
+  by         User      @relation("ComplaintBy", fields: [byId], references: [id])
+}
+
+model AdminAction {
+  id        String   @id @default(cuid())
+  action    String
+  details   String?
+  createdAt DateTime @default(now())
+  adminId   String
+  admin     User     @relation(fields: [adminId], references: [id])
+  targetId  String?
+}
+
+model DailyCheckin {
+  id        String   @id @default(cuid())
+  date      DateTime @default(now())
+  streak    Int      @default(1)
+  reward    Int      @default(0)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  @@unique([userId, date])
+}
+
+model SavedItem {
+  id        String   @id @default(cuid())
+  type      String
+  itemId    String
+  createdAt DateTime @default(now())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  @@unique([userId, type, itemId])
+}
+
+model ReadingHistory {
+  id        String   @id @default(cuid())
+  type      String
+  itemId    String
+  readAt    DateTime @default(now())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model BotSettings {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+}
