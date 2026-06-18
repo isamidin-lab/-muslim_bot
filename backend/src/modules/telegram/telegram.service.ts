@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Telegraf, Context, Markup } from 'telegraf';
+import { Telegraf, Context } from 'telegraf';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { PaymentService } from '../payment/payment.service';
 import { MembershipService } from '../membership/membership.service';
@@ -30,6 +30,9 @@ export class TelegramService implements OnModuleInit {
     this.setupCallbackHandlers();
     this.bot.launch();
     this.logger.log('Telegram bot started');
+
+    process.once('SIGINT', () => this.bot.stop('SIGINT'));
+    process.once('SIGTERM', () => this.bot.stop('SIGTERM'));
   }
 
   private isAdmin(role: string): boolean {
@@ -59,49 +62,55 @@ export class TelegramService implements OnModuleInit {
 
   private setupCommands() {
     this.bot.start(async (ctx) => {
-      const tid = ctx.from.id.toString();
-      const tenant = await this.prisma.tenant.findFirst({ where: { isActive: true } });
-      if (!tenant) return ctx.reply('Нет активной организации.');
+      try {
+        const tid = ctx.from.id.toString();
+        const tenant = await this.prisma.tenant.findFirst({ where: { isActive: true } });
+        if (!tenant) return ctx.reply('Нет активной организации.');
 
-      let user = await this.prisma.user.findFirst({ where: { telegramId: tid, tenantId: tenant.id } });
-      if (!user) {
-        const refCode = ctx.startPayload;
-        user = await this.prisma.user.create({
-          data: {
-            telegramId: tid, telegramUsername: ctx.from.username,
-            firstName: ctx.from.first_name || 'Пользователь',
-            lastName: ctx.from.last_name,
-            tenantId: tenant.id, role: 'MEMBER',
-            referralCode: `ref_${tid}_${Date.now()}`,
-          },
-        });
-        if (refCode) {
-          const referrer = await this.prisma.user.findFirst({ where: { referralCode: refCode } });
-          if (referrer && referrer.id !== user.id) {
-            await this.prisma.user.update({ where: { id: user.id }, data: { referredById: referrer.id } });
-            await this.prisma.referral.create({ data: { referrerId: referrer.id, referredId: user.id, reward: COINS_REFERRAL } });
-            await this.prisma.user.update({ where: { id: referrer.id }, data: { coins: { increment: COINS_REFERRAL } } });
-            await this.prisma.coinTransaction.create({ data: { userId: referrer.id, amount: COINS_REFERRAL, type: 'REFERRAL', reason: `Приглашение ${user.firstName}` } });
-            await this.bot.telegram.sendMessage(parseInt(referrer.telegramId!), `🎉 ${user.firstName} присоединился по вашей ссылке! +${COINS_REFERRAL} монет`);
+        let user = await this.prisma.user.findFirst({ where: { telegramId: tid, tenantId: tenant.id } });
+        if (!user) {
+          const refCode = ctx.startPayload;
+          user = await this.prisma.user.create({
+            data: {
+              telegramId: tid, telegramUsername: ctx.from.username,
+              firstName: ctx.from.first_name || 'Пользователь',
+              lastName: ctx.from.last_name,
+              tenantId: tenant.id, role: 'MEMBER',
+              referralCode: `ref_${tid}_${Date.now()}`,
+            },
+          });
+          if (refCode) {
+            const referrer = await this.prisma.user.findFirst({ where: { referralCode: refCode } });
+            if (referrer && referrer.id !== user.id) {
+              await this.prisma.user.update({ where: { id: user.id }, data: { referredById: referrer.id } });
+              await this.prisma.referral.create({ data: { referrerId: referrer.id, referredId: user.id, reward: COINS_REFERRAL } });
+              await this.prisma.user.update({ where: { id: referrer.id }, data: { coins: { increment: COINS_REFERRAL } } });
+              await this.prisma.coinTransaction.create({ data: { userId: referrer.id, amount: COINS_REFERRAL, type: 'REFERRAL', reason: `Приглашение ${user.firstName}` } });
+              await this.bot.telegram.sendMessage(parseInt(referrer.telegramId!), `🎉 ${user.firstName} присоединился по вашей ссылке! +${COINS_REFERRAL} монет`).catch(() => {});
+            }
           }
+          await this.checkAndAwardAchievements(user.id);
         }
+
+        if (!user.referralCode) {
+          await this.prisma.user.update({ where: { id: user.id }, data: { referralCode: `ref_${tid}_${Date.now()}` } });
+          user = await this.prisma.user.findFirst({ where: { telegramId: tid } });
+        }
+
+        const badges = [];
+        if (user.isVIP) badges.push('👑 VIP');
+        else if (user.isPremium) badges.push('⭐ Premium');
+        if (user.role === 'OWNER') badges.push('🔧 Owner');
+        else if (user.role === 'SYSTEM_ADMIN') badges.push('🛡 Admin');
+
+        return ctx.reply(
+          `Ассалому алейкум, ${user.firstName}! 👋\nДобро пожаловать в Muslim Bot.\n${badges.length ? `\n${badges.join(' ')}` : ''}`,
+          this.getMainKeyboard(user.role) as any,
+        );
+      } catch (err) {
+        this.logger.error(`Start error: ${err.message}`);
+        return ctx.reply('⚠️ Произошла ошибка. Попробуйте позже.');
       }
-
-      if (!user.referralCode) {
-        await this.prisma.user.update({ where: { id: user.id }, data: { referralCode: `ref_${tid}_${Date.now()}` } });
-        user = await this.prisma.user.findFirst({ where: { telegramId: tid } });
-      }
-
-      const badges = [];
-      if (user.isVIP) badges.push('👑 VIP');
-      else if (user.isPremium) badges.push('⭐ Premium');
-      if (user.role === 'OWNER') badges.push('🔧 Owner');
-      else if (user.role === 'SYSTEM_ADMIN') badges.push('🛡 Admin');
-
-      return ctx.reply(
-        `Ассалому алейкум, ${user.firstName}! 👋\nДобро пожаловать в Muslim Bot.\n${badges.length ? `\n${badges.join(' ')}` : ''}`,
-        this.getMainKeyboard(user.role) as any,
-      );
     });
 
     this.bot.command('admin', async (ctx) => {
@@ -123,6 +132,7 @@ export class TelegramService implements OnModuleInit {
 
   private setupCallbackHandlers() {
     this.bot.on('callback_query', async (ctx) => {
+      try { await (ctx as any).answerCbQuery(); } catch {}
       const data = (ctx.callbackQuery as any).data;
       if (!data) return;
       const [action, id, extra] = data.split(':');
@@ -130,61 +140,62 @@ export class TelegramService implements OnModuleInit {
       if (!user) return;
 
       try {
-        await (ctx as any).answerCbQuery();
-      } catch {}
-
-      switch (action) {
-        case 'courses': return this.handleCourses(ctx, user);
-        case 'course': return this.handleCourseDetail(ctx, user, id);
-        case 'lesson': return this.handleLesson(ctx, user, id);
-        case 'test': return this.handleTest(ctx, user, id);
-        case 'answer': return this.handleAnswer(ctx, user, id, extra);
-        case 'membership': return this.handleMembership(ctx, user);
-        case 'buy': return this.handleBuy(ctx, user, id);
-        case 'progress': return this.handleProgress(ctx, user);
-        case 'coins': return this.handleCoins(ctx, user);
-        case 'checkin': return this.handleCheckin(ctx, user);
-        case 'achievements': return this.handleAchievements(ctx, user);
-        case 'islamic': return this.handleIslamic(ctx, user);
-        case 'prayer': return this.handlePrayer(ctx, user);
-        case 'azkar': return this.handleAzkar(ctx, user);
-        case 'tasbih': return this.handleTasbih(ctx, user);
-        case 'qibla': return this.handleQibla(ctx, user);
-        case 'referral': return this.handleReferral(ctx, user);
-        case 'profile': return this.handleProfile(ctx, user);
-        case 'profile_edit': return this.handleProfileEdit(ctx, user);
-        case 'admin': return this.showAdminPanel(ctx, user);
-        case 'admin_stats': return this.handleAdminStats(ctx, user);
-        case 'admin_users': return this.handleAdminUsers(ctx, user);
-        case 'admin_broadcast': return this.handleAdminBroadcast(ctx, user);
-        case 'admin_complaints': return this.handleAdminComplaints(ctx, user);
-        case 'admin_logs': return this.handleAdminLogs(ctx, user);
-        case 'admin_settings': return this.handleAdminSettings(ctx, user);
-        case 'admin_user_action': return this.handleAdminUserAction(ctx, user, id);
-        case 'admin_broadcast_target': return this.handleAdminBroadcastTarget(ctx, user, id);
-        case 'admin_ban': return this.handleAdminBan(ctx, user, id);
-        case 'admin_unban': return this.handleAdminUnban(ctx, user, id);
-        case 'admin_premium': return this.handleAdminPremium(ctx, user, id);
-        case 'admin_vip': return this.handleAdminVip(ctx, user, id);
-        case 'complaint': return this.handleComplaint(ctx, user, id);
-        case 'hidden_mode': return this.handleHiddenMode(ctx, user);
-        case 'boost': return this.handleBoost(ctx, user);
-        case 'buy_premium': return this.handleBuyPremium(ctx, user);
-        case 'buy_vip': return this.handleBuyVip(ctx, user);
-        case 'edit_name': return this.handleEditName(ctx, user);
-        case 'edit_bio': return this.handleEditBio(ctx, user);
-        case 'edit_gender': return this.handleEditGender(ctx, user);
-        case 'set_gender': return this.handleSetGender(ctx, user, id);
-        case 'edit_country': return this.handleEditCountry(ctx, user);
-        case 'tasbih_count': return this.handleTasbihCount(ctx, user);
-        case 'tasbih_reset': return this.handleTasbihReset(ctx, user);
-        case 'find_match': return this.handleFindMatch(ctx, user);
-        case 'like': return this.handleLike(ctx, user, id);
-        case 'admin_setting_coins': return this.handleAdminSettingCoins(ctx, user);
-        case 'admin_setting_referral': return this.handleAdminSettingReferral(ctx, user);
-        case 'admin_setting_premium': return this.handleAdminSettingPremium(ctx, user);
-        case 'admin_setting_notifications': return this.handleAdminSettingNotifications(ctx, user);
-        default: break;
+        switch (action) {
+          case 'courses': return this.handleCourses(ctx, user);
+          case 'course': return this.handleCourseDetail(ctx, user, id);
+          case 'lesson': return this.handleLesson(ctx, user, id);
+          case 'test': return this.handleTest(ctx, user, id);
+          case 'answer': return this.handleAnswer(ctx, user, id, extra);
+          case 'membership': return this.handleMembership(ctx, user);
+          case 'buy': return this.handleBuy(ctx, user, id);
+          case 'progress': return this.handleProgress(ctx, user);
+          case 'coins': return this.handleCoins(ctx, user);
+          case 'checkin': return this.handleCheckin(ctx, user);
+          case 'achievements': return this.handleAchievements(ctx, user);
+          case 'islamic': return this.handleIslamic(ctx, user);
+          case 'prayer': return this.handlePrayer(ctx, user);
+          case 'azkar': return this.handleAzkar(ctx, user);
+          case 'tasbih': return this.handleTasbih(ctx, user);
+          case 'qibla': return this.handleQibla(ctx, user);
+          case 'referral': return this.handleReferral(ctx, user);
+          case 'profile': return this.handleProfile(ctx, user);
+          case 'profile_edit': return this.handleProfileEdit(ctx, user);
+          case 'admin': return this.showAdminPanel(ctx, user);
+          case 'admin_stats': return this.handleAdminStats(ctx, user);
+          case 'admin_users': return this.handleAdminUsers(ctx, user);
+          case 'admin_broadcast': return this.handleAdminBroadcast(ctx, user);
+          case 'admin_complaints': return this.handleAdminComplaints(ctx, user);
+          case 'admin_logs': return this.handleAdminLogs(ctx, user);
+          case 'admin_settings': return this.handleAdminSettings(ctx, user);
+          case 'admin_user_action': return this.handleAdminUserAction(ctx, user, id);
+          case 'admin_broadcast_target': return this.handleAdminBroadcastTarget(ctx, user, id);
+          case 'admin_ban': return this.handleAdminBan(ctx, user, id);
+          case 'admin_unban': return this.handleAdminUnban(ctx, user, id);
+          case 'admin_premium': return this.handleAdminPremium(ctx, user, id);
+          case 'admin_vip': return this.handleAdminVip(ctx, user, id);
+          case 'complaint': return this.handleComplaint(ctx, user, id);
+          case 'hidden_mode': return this.handleHiddenMode(ctx, user);
+          case 'boost': return this.handleBoost(ctx, user);
+          case 'buy_premium': return this.handleBuyPremium(ctx, user);
+          case 'buy_vip': return this.handleBuyVip(ctx, user);
+          case 'edit_name': return this.handleEditName(ctx, user);
+          case 'edit_bio': return this.handleEditBio(ctx, user);
+          case 'edit_gender': return this.handleEditGender(ctx, user);
+          case 'set_gender': return this.handleSetGender(ctx, user, id);
+          case 'edit_country': return this.handleEditCountry(ctx, user);
+          case 'tasbih_count': return this.handleTasbihCount(ctx, user);
+          case 'tasbih_reset': return this.handleTasbihReset(ctx, user);
+          case 'find_match': return this.handleFindMatch(ctx, user);
+          case 'like': return this.handleLike(ctx, user, id);
+          case 'admin_setting_coins': return this.handleAdminSettingCoins(ctx, user);
+          case 'admin_setting_referral': return this.handleAdminSettingReferral(ctx, user);
+          case 'admin_setting_premium': return this.handleAdminSettingPremium(ctx, user);
+          case 'admin_setting_notifications': return this.handleAdminSettingNotifications(ctx, user);
+          default: break;
+        }
+      } catch (err) {
+        this.logger.error(`Callback error: ${err.message}`);
+        try { await ctx.reply('⚠️ Произошла ошибка. Попробуйте позже.'); } catch {}
       }
     });
   }
