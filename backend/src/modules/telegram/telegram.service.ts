@@ -171,6 +171,19 @@ export class TelegramService implements OnModuleInit {
         case 'boost': return this.handleBoost(ctx, user);
         case 'buy_premium': return this.handleBuyPremium(ctx, user);
         case 'buy_vip': return this.handleBuyVip(ctx, user);
+        case 'edit_name': return this.handleEditName(ctx, user);
+        case 'edit_bio': return this.handleEditBio(ctx, user);
+        case 'edit_gender': return this.handleEditGender(ctx, user);
+        case 'set_gender': return this.handleSetGender(ctx, user, id);
+        case 'edit_country': return this.handleEditCountry(ctx, user);
+        case 'tasbih_count': return this.handleTasbihCount(ctx, user);
+        case 'tasbih_reset': return this.handleTasbihReset(ctx, user);
+        case 'find_match': return this.handleFindMatch(ctx, user);
+        case 'like': return this.handleLike(ctx, user, id);
+        case 'admin_setting_coins': return this.handleAdminSettingCoins(ctx, user);
+        case 'admin_setting_referral': return this.handleAdminSettingReferral(ctx, user);
+        case 'admin_setting_premium': return this.handleAdminSettingPremium(ctx, user);
+        case 'admin_setting_notifications': return this.handleAdminSettingNotifications(ctx, user);
         default: break;
       }
     });
@@ -298,7 +311,7 @@ export class TelegramService implements OnModuleInit {
     await this.prisma.dailyCheckin.create({ data: { userId: user.id, date: today, streak, reward } });
     await this.prisma.user.update({ where: { id: user.id }, data: { coins: { increment: reward } } });
     await this.prisma.coinTransaction.create({ data: { userId: user.id, amount: reward, type: 'CHECKIN', reason: `Ежедневный вход (серия ${streak} дн.)` } });
-
+    await this.checkAndAwardAchievements(user.id);
     return ctx.reply(
       `📅 Ежедневный вход!\n\n` +
       `🔥 Серия: ${streak} дн.\n` +
@@ -447,6 +460,172 @@ export class TelegramService implements OnModuleInit {
     return ctx.reply('📩 Жалоба отправлена. Модератор рассмотрит её.', this.getBackButton('start') as any);
   }
 
+  // === 1. PROFILE EDITING ===
+  private async handleEditName(ctx: Context, user: any) {
+    await ctx.reply('Введите новое имя:', { reply_markup: { inline_keyboard: [[{ text: '🔙 Отмена', callback_data: 'profile_edit' }]] } } as any);
+    this.bot.on('text', async (ctx2) => {
+      await this.prisma.user.update({ where: { id: user.id }, data: { firstName: ctx2.message.text } });
+      await ctx2.reply(`✅ Имя изменено на: ${ctx2.message.text}`, this.getBackButton('profile') as any);
+    });
+  }
+
+  private async handleEditBio(ctx: Context, user: any) {
+    await ctx.reply('Введите описание о себе:', { reply_markup: { inline_keyboard: [[{ text: '🔙 Отмена', callback_data: 'profile_edit' }]] } } as any);
+    this.bot.on('text', async (ctx2) => {
+      await this.prisma.user.update({ where: { id: user.id }, data: { bio: ctx2.message.text } });
+      await ctx2.reply('✅ Описание обновлено', this.getBackButton('profile') as any);
+    });
+  }
+
+  private async handleEditGender(ctx: Context, user: any) {
+    return ctx.reply('Выберите пол:', { reply_markup: { inline_keyboard: [
+      [{ text: '👨 Мужской', callback_data: 'set_gender:MALE' }, { text: '👩 Женский', callback_data: 'set_gender:FEMALE' }],
+      [{ text: '🔙 Отмена', callback_data: 'profile_edit' }],
+    ] } } as any);
+  }
+
+  private async handleSetGender(ctx: Context, user: any, gender: string) {
+    await this.prisma.user.update({ where: { id: user.id }, data: { gender } });
+    return ctx.reply(`✅ Пол изменён: ${gender === 'MALE' ? 'Мужской' : 'Женский'}`, this.getBackButton('profile') as any);
+  }
+
+  private async handleEditCountry(ctx: Context, user: any) {
+    await ctx.reply('Введите страну:', { reply_markup: { inline_keyboard: [[{ text: '🔙 Отмена', callback_data: 'profile_edit' }]] } } as any);
+    this.bot.on('text', async (ctx2) => {
+      await this.prisma.user.update({ where: { id: user.id }, data: { country: ctx2.message.text } });
+      await ctx2.reply(`✅ Страна изменена: ${ctx2.message.text}`, this.getBackButton('profile') as any);
+    });
+  }
+
+  // === 2. TASBIH COUNTER ===
+  private tasbihCounts = new Map<number, number>();
+
+  private async handleTasbihCount(ctx: Context, user: any) {
+    const chatId = ctx.chat?.id || 0;
+    const count = (this.tasbihCounts.get(chatId) || 0) + 1;
+    this.tasbihCounts.set(chatId, count);
+    return ctx.reply(
+      `📿 **Тасбих: ${count}**\n\nСубханАллах: ${count % 33}/33`,
+      { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+        [{ text: `📿 ${count + 1}`, callback_data: 'tasbih_count' }],
+        [{ text: '🔄 Сброс', callback_data: 'tasbih_reset' }],
+        [{ text: '🔙 Назад', callback_data: 'islamic' }],
+      ] } } as any,
+    );
+  }
+
+  private async handleTasbihReset(ctx: Context, user: any) {
+    const chatId = ctx.chat?.id || 0;
+    const count = this.tasbihCounts.get(chatId) || 0;
+    this.tasbihCounts.set(chatId, 0);
+    if (count >= 100) {
+      await this.prisma.user.update({ where: { id: user.id }, data: { coins: { increment: 5 } } });
+      await this.prisma.coinTransaction.create({ data: { userId: user.id, amount: 5, type: 'TASBIH', reason: '100+ тасбихов' } });
+      return ctx.reply(`📿 Сброшено! ${count} тасбихов. +5 монет!`, this.getBackButton('islamic') as any);
+    }
+    return ctx.reply(`📿 Сброшено! ${count} тасбихов.`, this.getBackButton('islamic') as any);
+  }
+
+  // === 3. BROADCAST SENDING ===
+  private async handleBroadcastSend(ctx: Context, admin: any, audience: string, text: string) {
+    const where: any = { tenantId: admin.tenantId, status: 'ACTIVE', telegramId: { not: null } };
+    if (audience === 'male') where.gender = 'MALE';
+    else if (audience === 'female') where.gender = 'FEMALE';
+    else if (audience === 'premium') where.isPremium = true;
+    const users = await this.prisma.user.findMany({ where });
+    let sent = 0, failed = 0;
+    for (const u of users) {
+      try { await this.bot.telegram.sendMessage(parseInt(u.telegramId), text); sent++; } catch { failed++; }
+    }
+    await this.prisma.adminAction.create({ data: { adminId: admin.id, action: 'BROADCAST', details: `${audience}: ${sent} ok, ${failed} err` } });
+    return ctx.reply(`📢 Рассылка!\n✅ ${sent}\n❌ ${failed}`, this.getBackButton('admin') as any);
+  }
+
+  // === 4. ACHIEVEMENT CHECK ===
+  private async checkAndAwardAchievements(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) return;
+    const existing = await this.prisma.userAchievement.findMany({ where: { userId } });
+    const unlocked = new Set(existing.map(e => e.achievementId));
+    const checks = [
+      { name: 'Первое знакомство', check: () => true },
+      { name: 'Заполнил анкету', check: () => !!(user.bio && user.gender && user.country) },
+      { name: 'Premium пользователь', check: () => user.isPremium },
+      { name: 'VIP пользователь', check: () => user.isVIP },
+    ];
+    for (const ch of checks) {
+      const ach = await this.prisma.achievement.findFirst({ where: { name: ch.name } });
+      if (!ach || unlocked.has(ach.id)) continue;
+      if (ch.check()) {
+        await this.prisma.userAchievement.create({ data: { userId, achievementId: ach.id } });
+        if (ach.reward > 0) {
+          await this.prisma.user.update({ where: { id: userId }, data: { coins: { increment: ach.reward } } });
+          await this.prisma.coinTransaction.create({ data: { userId, amount: ach.reward, type: 'ACHIEVEMENT', reason: ach.name } });
+        }
+        if (user.telegramId) {
+          await this.bot.telegram.sendMessage(parseInt(user.telegramId), `🎯 Достижение: ${ach.icon} ${ach.name}${ach.reward ? ` +${ach.reward} 💰` : ''}`).catch(() => {});
+        }
+      }
+    }
+  }
+
+  // === 5. DATING FEATURES ===
+  private async handleFindMatch(ctx: Context, user: any) {
+    if (!user.gender) return ctx.reply('❌ Заполните профиль (пол)', this.getBackButton('profile') as any);
+    const oppositeGender = user.gender === 'MALE' ? 'FEMALE' : 'MALE';
+    const match = await this.prisma.user.findFirst({
+      where: { tenantId: user.tenantId, gender: oppositeGender, status: 'ACTIVE', isHidden: false, id: { not: user.id } },
+      orderBy: { lastActiveAt: 'desc' },
+    });
+    if (!match) return ctx.reply('😔 Нет анкет', this.getBackButton('start') as any);
+    let text = `👤 **${match.firstName}**\n`;
+    if (match.age) text += `Возраст: ${match.age}\n`;
+    if (match.country) text += `Страна: ${match.country}\n`;
+    if (match.bio) text += `${match.bio}\n`;
+    if (match.isPremium) text += `⭐ Premium\n`;
+    return ctx.reply(text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+      [{ text: '❤️ Нравится', callback_data: `like:${match.id}` }, { text: '👎 Далее', callback_data: 'find_match' }],
+      [{ text: '📩 Жалоба', callback_data: `complaint:${match.id}` }],
+      [{ text: '🔙 Назад', callback_data: 'start' }],
+    ] } } as any);
+  }
+
+  private async handleLike(ctx: Context, user: any, targetId: string) {
+    const target = await this.prisma.user.findUnique({ where: { id: targetId } });
+    if (!target) return ctx.reply('Не найден');
+    await this.prisma.savedItem.create({ data: { userId: user.id, type: 'LIKE', itemId: targetId } }).catch(() => {});
+    const mutual = await this.prisma.savedItem.findFirst({ where: { userId: targetId, type: 'LIKE', itemId: user.id } });
+    if (mutual) {
+      if (user.telegramId) await this.bot.telegram.sendMessage(parseInt(user.telegramId), `🎉 Взаимная симпатия с ${target.firstName}!`).catch(() => {});
+      if (target.telegramId) await this.bot.telegram.sendMessage(parseInt(target.telegramId), `🎉 Взаимная симпатия с ${user.firstName}!`).catch(() => {});
+    }
+    return this.handleFindMatch(ctx, user);
+  }
+
+  // === 6. ADMIN SETTINGS ===
+  private async handleAdminSettingCoins(ctx: Context, admin: any) {
+    if (!this.isOwner(admin.role)) return ctx.reply('Только владелец');
+    const s = await this.prisma.botSettings.findMany();
+    let text = '💰 **Настройки монет**\n\n';
+    for (const x of s) text += `• ${x.key}: ${x.value}\n`;
+    return ctx.reply(text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '🔙', callback_data: 'admin_settings' }]] } } as any);
+  }
+
+  private async handleAdminSettingReferral(ctx: Context, admin: any) {
+    if (!this.isOwner(admin.role)) return ctx.reply('Только владелец');
+    return ctx.reply('🔗 **Рефералы**\n\nНаграда: 50 монет\nБонус: +5/день', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '🔙', callback_data: 'admin_settings' }]] } } as any);
+  }
+
+  private async handleAdminSettingPremium(ctx: Context, admin: any) {
+    if (!this.isOwner(admin.role)) return ctx.reply('Только владелец');
+    return ctx.reply('⭐ **Premium**\n\nЦена: 500 монет/30д\nVIP: 1500 монет/30д', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '🔙', callback_data: 'admin_settings' }]] } } as any);
+  }
+
+  private async handleAdminSettingNotifications(ctx: Context, admin: any) {
+    if (!this.isOwner(admin.role)) return ctx.reply('Только владелец');
+    return ctx.reply('🔔 **Уведомления**\n\n• Новые пользователи: ✅\n• Оплата: ✅\n• Жалобы: ✅', { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '🔙', callback_data: 'admin_settings' }]] } } as any);
+  }
+
   // === ADMIN PANEL ===
 
   private async showAdminPanel(ctx: Context, user: any) {
@@ -575,7 +754,11 @@ export class TelegramService implements OnModuleInit {
     else if (target === 'female') where.gender = 'FEMALE';
     else if (target === 'premium') where.isPremium = true;
     const count = await this.prisma.user.count({ where });
-    return ctx.reply(`📢 Аудитория: ${count} пользователей.\n\nОтправьте текст рассылки:`, { reply_markup: { inline_keyboard: [[{ text: '🔙 Отмена', callback_data: 'admin' }]] } } as any);
+    await ctx.reply(`📢 Аудитория: ${count} чел.\n\nОтправьте текст рассылки:`, { reply_markup: { inline_keyboard: [[{ text: '🔙 Отмена', callback_data: 'admin' }]] } } as any);
+    this.bot.on('text', async (ctx2) => {
+      if (ctx2.message.text === '🔙 Отмена') return;
+      await this.handleBroadcastSend(ctx2, admin, target, ctx2.message.text);
+    });
   }
 
   private async handleAdminComplaints(ctx: Context, user: any) {
