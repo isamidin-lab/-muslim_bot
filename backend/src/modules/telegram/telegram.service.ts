@@ -417,7 +417,7 @@ export class TelegramService implements OnModuleInit {
     if (user.gender) text += `Пол: ${user.gender === 'MALE' ? 'Мужской' : 'Женский'}\n`;
     if (user.country) text += `Страна: ${user.country}\n`;
     if (user.bio) text += `О себе: ${user.bio}\n`;
-    return ctx.reply(text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [
+    return ctx.reply(text, { reply_markup: { inline_keyboard: [
       [{ text: '✏️ Редактировать', callback_data: 'profile_edit' }],
       [{ text: '🔙 Назад', callback_data: 'start' }],
     ] } } as any);
